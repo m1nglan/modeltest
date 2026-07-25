@@ -49,6 +49,5 @@ public:
 
 private:
     void *m_model;          /**< Opaque pointer to dl::Model */
-    void *m_preprocessor;   /**< Opaque pointer to dl::image::ImagePreprocessor */
     bool  m_initialized;
 };
