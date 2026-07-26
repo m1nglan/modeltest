@@ -8,20 +8,18 @@ endif()
 set(cmake_dir ${espdl_dir}/fbs_loader/cmake)
 include(${cmake_dir}/utilities.cmake)
 
-# JPG images to embed as rodata binary data
-set(embed_jpg_files
+# Files to embed as rodata binary data: JPG images + model
+set(embed_bin_files
     "t1.jpg"
     "t2.jpg"
+    "model.espdl"
 )
 
 idf_component_register(SRCS "main.cpp" "driver/classifier_driver.cpp"
                     INCLUDE_DIRS "." "driver"
                     REQUIRES espressif__esp-dl)
 
-# Embed JPG files into rodata (creates _binary_t1_jpg_start etc.)
-foreach(jpg_file ${embed_jpg_files})
-    target_add_aligned_binary_data(${COMPONENT_LIB} "${CMAKE_CURRENT_SOURCE_DIR}/${jpg_file}" BINARY)
+# Embed files into rodata (creates _binary_t1_jpg_start, _binary_model_espdl_start etc.)
+foreach(bin_file ${embed_bin_files})
+    target_add_aligned_binary_data(${COMPONENT_LIB} "${CMAKE_CURRENT_SOURCE_DIR}/${bin_file}" BINARY)
 endforeach()
-
-# Flash model.espdl to the "model" partition
-esptool_py_flash_to_partition(flash "model" "${CMAKE_CURRENT_SOURCE_DIR}/model.espdl")

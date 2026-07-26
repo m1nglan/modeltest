@@ -3,8 +3,9 @@ CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
 
-# ESP-DL: model location in flash partition
-CONFIG_ESP_DL_MODEL_LOCATION_IN_FLASH_PARTITION=y
+# ESP-DL: model location in flash rodata (embedded in app binary)
+# CONFIG_ESP_DL_MODEL_LOCATION_IN_FLASH_PARTITION=y
+# (model in rodata is default, no extra config needed)
 
 # Flash size: N16R8 = 16MB
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
