@@ -99,5 +99,7 @@ public:
 
 private:
     void *m_model;          /**< 指向 dl::Model 的不透明指针 */
+    void *m_preprocessor;   /**< 指向 dl::image::ImagePreprocessor (仅 NHWC 模式) */
     bool  m_initialized;    /**< init() 是否已成功调用 */
+    bool  m_is_nchw;        /**< true=NCHW 手动量化, false=NHWC ImagePreprocessor */
 };
