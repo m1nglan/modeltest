@@ -52,8 +52,17 @@ esp_err_t ClassifierDriver::init()
         return ESP_FAIL;
     }
 
-    // Minimize to free metadata after loading
-    model->minimize();
+    // Run built-in model self-test (if exported with test data in PPQ)
+    esp_err_t test_ret = model->test();
+    if (test_ret == ESP_OK) {
+        ESP_LOGI(TAG, "Model self-test PASSED");
+    } else {
+        ESP_LOGW(TAG, "Model self-test skipped or failed (model may not have embedded test data)");
+    }
+
+    // NOTE: minimize() frees metadata but may also release model weights,
+    // causing all outputs to be identical (just bias). Disabled for correctness.
+    // model->minimize();
     m_model = model;
 
     // 2. Inspect input tensor shape (expected: [3, 224, 224] NCHW)
@@ -117,6 +126,8 @@ classification_result_t ClassifierDriver::infer(const uint8_t *jpg_data, size_t 
         return result;
     }
 
+    ESP_LOGI(TAG, "Decoded JPEG: %dx%d, type=%d", img.width, img.height, img.pix_type);
+
     // ====== 2. Resize to 224×224 if needed ======
     dl::image::img_t resized;
     if (img.width != 224 || img.height != 224) {
@@ -133,20 +144,34 @@ classification_result_t ClassifierDriver::infer(const uint8_t *jpg_data, size_t 
 
         // Free original, use resized
         heap_caps_free(img.data);
+        ESP_LOGI(TAG, "Resized to 224x224");
     } else {
         resized = img;  // already 224x224, use directly
+        ESP_LOGI(TAG, "Image already 224x224, no resize needed");
     }
 
-    // ====== 3. Manual NCHW quantization ======
+    // ====== 3. Manual NCHW quantization into a temp buffer ======
     // Formula: quantized = clamp(round(((pixel/255 - mean) / std) / scale), -128, 127)
     // scale = 2^(-exponent) = 2^5 = 32
     // Combined: q = clamp(round(((pixel/255 - mean) / std) * 32), -128, 127)
     constexpr float INV_255 = 1.0f / 255.0f;
     constexpr float SCALE = 32.0f;  // 1 / 0.03125
 
-    dl::TensorBase *model_input = model->get_input();
-    int8_t *input_data = model_input->get_element_ptr<int8_t>();
+    // Allocate a separate buffer for preprocessed INT8 data (NCHW layout)
+    int8_t *input_data = (int8_t *)heap_caps_malloc(3 * 224 * 224, MALLOC_CAP_SPIRAM);
+    if (!input_data) {
+        ESP_LOGE(TAG, "Failed to allocate input buffer");
+        heap_caps_free(resized.data);
+        return result;
+    }
+
     uint8_t *src = static_cast<uint8_t *>(resized.data);
+
+    // DEBUG: print first 4 pixels of source
+    ESP_LOGI(TAG, "Source pixels[0..3]: R=%d %d %d %d, G=%d %d %d %d, B=%d %d %d %d",
+        src[0], src[3], src[6], src[9],
+        src[1], src[4], src[7], src[10],
+        src[2], src[5], src[8], src[11]);
 
     for (int h = 0; h < 224; h++) {
         for (int w = 0; w < 224; w++) {
@@ -167,10 +192,30 @@ classification_result_t ClassifierDriver::infer(const uint8_t *jpg_data, size_t 
         }
     }
 
+    // DEBUG: print first 4 quantized values per channel
+    ESP_LOGI(TAG, "Quantized ch0[0..3]: %d %d %d %d",
+        input_data[0], input_data[1], input_data[2], input_data[3]);
+    ESP_LOGI(TAG, "Quantized ch1[0..3]: %d %d %d %d",
+        input_data[50176], input_data[50177], input_data[50178], input_data[50179]);
+
     heap_caps_free(resized.data);
 
-    // ====== 4. Run model inference ======
-    model->run();
+    // ====== 4. Create input tensor and run model inference ======
+    // Use the run(TensorBase *input) API to explicitly pass the input
+    {
+        // Wrap our buffer in a TensorBase (deep=false → no copy)
+        dl::TensorBase input_tensor(
+            {3, 224, 224},           // shape (NCHW)
+            input_data,              // preprocessed INT8 data
+            -5,                      // exponent (matches model input)
+            dl::DATA_TYPE_INT8,      // dtype
+            false                    // deep = false, use pointer directly
+        );
+        model->run(&input_tensor);
+    }
+
+    // Free our input buffer after inference
+    heap_caps_free(input_data);
 
     // ====== 5. Get output tensor (shape [2], INT8) ======
     dl::TensorBase *output = model->get_output();
@@ -181,6 +226,9 @@ classification_result_t ClassifierDriver::infer(const uint8_t *jpg_data, size_t 
 
     int8_t *output_data = output->get_element_ptr<int8_t>();
     int exponent = output->exponent;
+
+    ESP_LOGI(TAG, "Raw output INT8: [%d, %d], exponent=%d",
+             output_data[0], output_data[1], exponent);
 
     // ====== 6. Dequantize: float_val = int_val × 2^exponent ======
     float scores[2];
