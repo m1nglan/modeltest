@@ -92,11 +92,18 @@ def preprocess(image_path: str) -> np.ndarray:
     pixels = np.round(pixels)
     pixels = np.clip(pixels, -128, 127)
 
-    # 8) HWC → CHW 布局转换，转 INT8
-    quantized = pixels.transpose(2, 0, 1).astype(np.int8)  # shape: (3, 224, 224)
+    # 转为 INT8 (HWC 布局，尚未 transpose)
+    quantized_hwc = np.round(pixels).clip(-128, 127).astype(np.int8)  # shape: (224, 224, 3)
 
-    print(f"  量化后 ch0[0..3]: {quantized[0, 0, :4].tolist()}")
-    print(f"  量化后 ch1[0..3]: {quantized[1, 0, :4].tolist()}")
+    # 调试：打印 NHWC 布局（与 ESP32 ImagePreprocessor 输出对比）
+    print(f"  NHWC input[0] ch0[0..3]: {quantized_hwc[0, :4, 0].tolist()}")
+    print(f"  NHWC input[0] ch1[0..3]: {quantized_hwc[0, :4, 1].tolist()}")
+
+    # 8) HWC → CHW 布局转换（ONNX Runtime 需要 NCHW）
+    quantized = quantized_hwc.transpose(2, 0, 1)  # shape: (3, 224, 224)
+
+    print(f"  CHW  ch0[0..3]: {quantized[0, 0, :4].tolist()}")
+    print(f"  CHW  ch1[0..3]: {quantized[1, 0, :4].tolist()}")
 
     return quantized
 

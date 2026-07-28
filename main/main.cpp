@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include "esp_log.h"
 #include "driver/classifier_driver.hpp"
+#include "test_inputs.h"
 
 /* 日志标签 */
 static const char *TAG = "modeltest";
@@ -77,6 +78,25 @@ extern "C" void app_main(void)
         classification_result_t res = driver.infer(t2_jpg_start, len);
         ESP_LOGI(TAG, "t2.jpg => class=%s (%d), score=%.4f, prob=%.4f%%",
                  res.label, res.class_id, res.score, res.probability * 100.0f);
+    }
+
+    /*
+     * 步骤 5：用 PC 预处理的 INT8 数据直接测试模型（跳过 JPEG 解码和预处理）
+     * 如果此步骤结果正确但步骤 3/4 错误，说明问题是 JPEG 解码/预处理差异。
+     * 如果此步骤也错误，说明模型推理本身有问题。
+     */
+    ESP_LOGI(TAG, "=== PC-preprocessed data test (bypass JPEG) ===");
+    {
+        ESP_LOGI(TAG, "--- t1 (preprocessed) ---");
+        classification_result_t res1 = driver.infer_from_preprocessed(test_input_t1);
+        ESP_LOGI(TAG, "t1_pre => class=%s (%d), score=%.4f, prob=%.4f%%",
+                 res1.label, res1.class_id, res1.score, res1.probability * 100.0f);
+    }
+    {
+        ESP_LOGI(TAG, "--- t2 (preprocessed) ---");
+        classification_result_t res2 = driver.infer_from_preprocessed(test_input_t2);
+        ESP_LOGI(TAG, "t2_pre => class=%s (%d), score=%.4f, prob=%.4f%%",
+                 res2.label, res2.class_id, res2.score, res2.probability * 100.0f);
     }
 
     ESP_LOGI(TAG, "All tests complete.");

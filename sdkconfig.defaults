@@ -21,3 +21,11 @@ CONFIG_SPIRAM_IGNORE_NOTFOUND=y
 
 # Increase log level
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# Disable task watchdog (each inference takes ~3s, 6 calls = 18s total)
+CONFIG_TASK_WDT=n
+# Keep interrupt watchdog with long timeout
+CONFIG_INT_WDT_TIMEOUT_MS=30000
+
+
+CONFIG_PIE_V1_BOOST=y

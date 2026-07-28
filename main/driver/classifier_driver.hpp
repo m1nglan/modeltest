@@ -85,6 +85,14 @@ public:
     classification_result_t infer(const uint8_t *jpg_data, size_t jpg_len);
 
     /**
+     * @brief 直接使用 PC 预处理后的 INT8 数据进行推理（跳过预处理，只测模型）
+     *
+     * @param int8_data  指向 [224x224x3] INT8 NHWC 数据的指针
+     * @return classification_result_t 分类结果
+     */
+    classification_result_t infer_from_preprocessed(const int8_t *int8_data);
+
+    /**
      * @brief 运行诊断测试
      *
      * 使用三种已知输入模式验证模型：

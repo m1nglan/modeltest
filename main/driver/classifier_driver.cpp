@@ -69,16 +69,20 @@ esp_err_t ClassifierDriver::init()
     ESP_LOGI(TAG, "Model input: [%s], dtype=%d, exponent=%d", ss.c_str(), (int)input->dtype, (int)input->exponent);
 
     if (s.size() >= 3 && s[s.size()-1] == 3 && s[s.size()-2] == 224 && s[s.size()-3] == 224) {
-        // NHWC: [1, 224, 224, 3] 或 [224, 224, 3] — 使用 ImagePreprocessor
+        // NHWC [1,224,224,3] 或 [224,224,3] — 手动量化（HWC 布局无需转换）
         m_is_nchw = false;
-        ESP_LOGI(TAG, "Detected NHWC layout → using ImagePreprocessor");
-        m_preprocessor = new dl::image::ImagePreprocessor(model,
-            {MEAN_255[0], MEAN_255[1], MEAN_255[2]},
-            {STD_255[0],  STD_255[1],  STD_255[2]});
+        if (s.size() == 4 && s[0] == 1) {
+            ESP_LOGI(TAG, "Detected NHWC [1,224,224,3] → using ImagePreprocessor");
+            m_preprocessor = new dl::image::ImagePreprocessor(model,
+                {MEAN_255[0], MEAN_255[1], MEAN_255[2]},
+                {STD_255[0],  STD_255[1],  STD_255[2]});
+        } else {
+            ESP_LOGI(TAG, "Detected HWC [224,224,3] → manual quantize (no layout conversion needed)");
+            // 输入即是 HWC，和 JPEG 解码布局一致，直接量化写入
+        }
     } else if (s.size() == 3 && s[0] == 3 && s[1] == 224 && s[2] == 224) {
-        // NCHW: [3, 224, 224] — 手动量化
         m_is_nchw = true;
-        ESP_LOGI(TAG, "Detected NCHW layout → using manual quantization");
+        ESP_LOGI(TAG, "Detected NCHW [3,224,224] → manual quantization + HWC→CHW");
     } else {
         ESP_LOGE(TAG, "Unsupported shape. Expected NHWC or NCHW.");
         delete model; m_model = nullptr; return ESP_FAIL;
@@ -134,6 +138,14 @@ classification_result_t ClassifierDriver::infer(const uint8_t *jpg_data, size_t 
     dl::image::img_t img = dl::image::sw_decode_jpeg(
         {.data = (void *)jpg_data, .data_len = jpg_len}, dl::image::DL_IMAGE_PIX_TYPE_RGB888);
     if (!img.data) { ESP_LOGE(TAG, "JPEG decode failed"); return r; }
+    ESP_LOGI(TAG, "  JPEG decoded: %dx%d", img.width, img.height);
+    // 调试：打印解码后的 raw 像素值前 4 像素
+    {
+        uint8_t *rp = (uint8_t *)img.data;
+        ESP_LOGI(TAG, "  raw ch0[0..3]: %d %d %d %d", rp[0], rp[3], rp[6], rp[9]);
+        ESP_LOGI(TAG, "  raw ch1[0..3]: %d %d %d %d", rp[1], rp[4], rp[7], rp[10]);
+        ESP_LOGI(TAG, "  raw ch2[0..3]: %d %d %d %d", rp[2], rp[5], rp[8], rp[11]);
+    }
 
     if (m_is_nchw) {
         // ===== NCHW: 手动 resize + 量化 + HWC→CHW =====
@@ -159,16 +171,88 @@ classification_result_t ClassifierDriver::infer(const uint8_t *jpg_data, size_t 
                 input[2*50176+chw] = (int8_t)fmaxf(-128,fminf(127,roundf(((b-MEAN_01[2])/STD_01[2])*SCALE)));
             }
         heap_caps_free(res.data);
+        // 调试：NCHW 输入前4像素
+        ESP_LOGI(TAG, "  input ch0[0..3]: %d %d %d %d", input[0], input[1], input[2], input[3]);
+        ESP_LOGI(TAG, "  input ch1[0..3]: %d %d %d %d", input[50176], input[50177], input[50178], input[50179]);
+        ESP_LOGI(TAG, "  input ch2[0..3]: %d %d %d %d", input[100352], input[100353], input[100354], input[100355]);
         { dl::TensorBase in({3,224,224}, input, -5, dl::DATA_TYPE_INT8, false); model->run(&in); }
         heap_caps_free(input);
-    } else {
-        // ===== NHWC: ImagePreprocessor 自动完成 resize + normalize + quantize =====
+    } else if (m_preprocessor) {
+        // ===== NHWC [1,224,224,3]: ImagePreprocessor =====
         auto *pp = static_cast<dl::image::ImagePreprocessor *>(m_preprocessor);
         pp->preprocess(img); heap_caps_free(img.data);
+        // 调试：打印预处理后的前 4 像素 (NHWC 布局, 按通道提取)
+        {
+            dl::TensorBase *in_t = model->get_input();
+            int8_t *p = in_t->get_element_ptr<int8_t>();
+            ESP_LOGI(TAG, "  input ch0[0..3]: %d %d %d %d",
+                     p[0], p[3], p[6], p[9]);
+            ESP_LOGI(TAG, "  input ch1[0..3]: %d %d %d %d",
+                     p[1], p[4], p[7], p[10]);
+            ESP_LOGI(TAG, "  input ch2[0..3]: %d %d %d %d",
+                     p[2], p[5], p[8], p[11]);
+        }
+        model->run();
+    } else {
+        // ===== HWC [224,224,3]: 手动量化，无需布局转换 =====
+        dl::TensorBase *in_t = model->get_input();
+        int8_t *dst = in_t->get_element_ptr<int8_t>();
+
+        dl::image::img_t src_img = img;
+        dl::image::img_t tmp, cr;
+        if (img.width != 224 || img.height != 224) {
+            float sf = 256.0f / (img.width < img.height ? img.width : img.height);
+            int nw = (int)(img.width * sf), nh = (int)(img.height * sf);
+            tmp = {heap_caps_malloc(nw*nh*3, MALLOC_CAP_DEFAULT), (uint16_t)nw, (uint16_t)nh, img.pix_type};
+            dl::image::ImageTransformer().set_src_img(img).set_dst_img(tmp).transform(); heap_caps_free(img.data);
+            int cx = (nw-224)/2, cy = (nh-224)/2;
+            cr = {heap_caps_malloc(224*224*3, MALLOC_CAP_DEFAULT), 224, 224, img.pix_type};
+            dl::image::ImageTransformer().set_src_img(tmp).set_dst_img(cr).set_src_img_crop_area({cx,cy,cx+224,cy+224}).transform();
+            heap_caps_free(tmp.data);
+            src_img = cr;
+        }
+        uint8_t *s = (uint8_t *)src_img.data;
+        for (int i = 0; i < 224*224*3; i++) {
+            int c = i % 3;
+            dst[i] = (int8_t)fmaxf(-128,fminf(127,roundf(((s[i]*INV_255 - MEAN_01[c]) / STD_01[c]) * SCALE)));
+        }
+        if (img.width != 224 || img.height != 224) heap_caps_free(cr.data);
+        else heap_caps_free(img.data);
         model->run();
     }
 
     // 输出 + 反量化 + softmax + argmax
+    dl::TensorBase *out = model->get_output();
+    if (!out || out->get_size() < 2) { ESP_LOGE(TAG, "Invalid output"); return r; }
+    int8_t *od = out->get_element_ptr<int8_t>(); int e = out->exponent;
+    ESP_LOGI(TAG, "Raw output: [%d,%d] exp=%d", od[0], od[1], e);
+    float s[2]; for (int i=0;i<2;i++) s[i]=dl::dequantize(od[i], DL_SCALE(e));
+    float mx = (s[0]>s[1])?s[0]:s[1], e0=expf(s[0]-mx), e1=expf(s[1]-mx);
+    float p0=e0/(e0+e1), p1=e1/(e0+e1);
+    if (p0>=p1) { r.class_id=0; r.score=s[0]; r.probability=p0; r.label="washer"; }
+    else        { r.class_id=1; r.score=s[1]; r.probability=p1; r.label="screw";  }
+    ESP_LOGI(TAG, "Result: %s(%d) score=%.4f prob=%.2f%%",
+             r.label, r.class_id, r.score, r.probability*100.0f);
+    return r;
+}
+
+classification_result_t ClassifierDriver::infer_from_preprocessed(const int8_t *int8_data)
+{
+    classification_result_t r = {}; r.class_id = -1; r.label = "unknown";
+    if (!m_initialized || !m_model) { ESP_LOGE(TAG, "Not initialized."); return r; }
+    dl::Model *model = static_cast<dl::Model *>(m_model);
+
+    // 直接写入模型输入 tensor
+    dl::TensorBase *in_t = model->get_input();
+    int8_t *dst = in_t->get_element_ptr<int8_t>();
+    int sz = in_t->get_size();
+    memcpy(dst, int8_data, sz * sizeof(int8_t));
+    ESP_LOGI(TAG, "  loaded %d bytes from preprocessed data, ch0[0..3]: %d %d %d %d",
+             sz, dst[0], dst[3], dst[6], dst[9]);
+
+    model->run();
+
+    // 输出处理（与 infer() 相同）
     dl::TensorBase *out = model->get_output();
     if (!out || out->get_size() < 2) { ESP_LOGE(TAG, "Invalid output"); return r; }
     int8_t *od = out->get_element_ptr<int8_t>(); int e = out->exponent;
