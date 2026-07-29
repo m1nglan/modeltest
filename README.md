@@ -117,6 +117,7 @@ typedef struct {
 | `~ClassifierDriver()` | 析构函数，释放模型和预处理器 |
 | `esp_err_t init()` | 加载 `model.espdl`（从 rodata）+ 创建 ImagePreprocessor |
 | `infer(jpg_data, len)` | JPEG → 解码 → 预处理 → 推理 → 返回分类结果 |
+| `infer_rgb(rgb_data, w, h)` | **RGB888** → 预处理(resize/crop/量化) → 推理，适合摄像头直出 |
 | `infer_from_preprocessed(int8_data)` | 直接喂 INT8 数据推理（跳过预处理，调试用） |
 
 ---

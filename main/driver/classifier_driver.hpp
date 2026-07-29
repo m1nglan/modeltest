@@ -71,6 +71,15 @@ public:
      */
     classification_result_t infer_from_preprocessed(const int8_t *int8_data);
 
+    /**
+     * @brief 从 raw RGB888 数据推理（跳过 JPEG 解码，适合摄像头直出）
+     * @param rgb_data  RGB888 像素数据 HWC 布局，每像素 R0 G0 B0 R1 G1 B1...
+     * @param width     图片宽度（像素）
+     * @param height    图片高度（像素）
+     * @note 内部会做 resize+crop+归一化+量化，不要求输入为 224x224
+     */
+    classification_result_t infer_rgb(const uint8_t *rgb_data, int width, int height);
+
 private:
     void *m_model;          /*!< dl::Model */
     void *m_preprocessor;   /*!< dl::image::ImagePreprocessor */

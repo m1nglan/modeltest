@@ -63,7 +63,7 @@ extern "C" void app_main(void)
     }
 
     /*
-     * 步骤 4：测试 t2.jpg
+     * 步骤 3：测试 t2.jpg
      * 预期输出：class=screw (class_id=1)
      */
     {
@@ -72,14 +72,14 @@ extern "C" void app_main(void)
         ESP_LOGI(TAG, "t2.jpg => %s(%d) score=%.4f", res.label, res.class_id, res.score);
     }
 
-    /* 步骤 5：t3.jpg（垫圈） */
+    /* 步骤 4：t3.jpg（垫圈） */
     {
         size_t len = (size_t)(t3_jpg_end - t3_jpg_start);
         classification_result_t res = driver.infer(t3_jpg_start, len);
         ESP_LOGI(TAG, "t3.jpg => %s(%d) score=%.4f", res.label, res.class_id, res.score);
     }
 
-    /* 步骤 6：t4.jpg（螺丝） */
+    /* 步骤 5：t4.jpg（螺丝） */
     {
         size_t len = (size_t)(t4_jpg_end - t4_jpg_start);
         classification_result_t res = driver.infer(t4_jpg_start, len);
