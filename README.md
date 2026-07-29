@@ -6,7 +6,7 @@
 
 **硬件平台**: ESP32-S3 (16MB Flash + 8MB Octal PSRAM)  
 **框架**: ESP-IDF v6.0.1 + ESP-DL (managed_components)  
-**模型**: MobileNetV2 风格 INT8 量化二分类器, NHWC `[1x224x224x3]`, exponent=-5  
+**模型**: MobileNetV2 风格 INT8 量化二分类器, NHWC `[1x224x224x3]`, exponent=-6  
 **量化工具**: ESP-PPQ (PPQ-based)
 
 ---
@@ -37,6 +37,8 @@
 | `model.json` | PPQ 导出的量化配置 JSON: 每层量化策略（per-tensor, symmetric, power-of-2） |
 | `t1.jpg` | 测试图 1: 垫圈 (washer), class 0, 640×480 |
 | `t2.jpg` | 测试图 2: 螺丝 (screw), class 1, 640×480 |
+| `t3.jpg` | 测试图 3: 垫圈 (washer), class 0 |
+| `t4.jpg` | 测试图 4: 螺丝 (screw), class 1 |
 | `test_inputs.h` | 由 `gen_test_data.py` 生成, PC 预处理后的 INT8 输入数据, 用于跳过预处理直接测试模型 |
 | `data.log` | 多次烧录测试的串口日志归档 |
 

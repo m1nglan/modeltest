@@ -12,6 +12,8 @@ include(${cmake_dir}/utilities.cmake)
 set(embed_bin_files
     "t1.jpg"
     "t2.jpg"
+    "t3.jpg"
+    "t4.jpg"
     "model.espdl"
 )
 

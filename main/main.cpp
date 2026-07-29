@@ -17,7 +17,6 @@
 #include <stdio.h>
 #include "esp_log.h"
 #include "driver/classifier_driver.hpp"
-#include "test_inputs.h"
 
 /* 日志标签 */
 static const char *TAG = "modeltest";
@@ -32,6 +31,10 @@ extern const uint8_t t1_jpg_start[] asm("_binary_t1_jpg_start");
 extern const uint8_t t1_jpg_end[]   asm("_binary_t1_jpg_end");
 extern const uint8_t t2_jpg_start[] asm("_binary_t2_jpg_start");
 extern const uint8_t t2_jpg_end[]   asm("_binary_t2_jpg_end");
+extern const uint8_t t3_jpg_start[] asm("_binary_t3_jpg_start");
+extern const uint8_t t3_jpg_end[]   asm("_binary_t3_jpg_end");
+extern const uint8_t t4_jpg_start[] asm("_binary_t4_jpg_start");
+extern const uint8_t t4_jpg_end[]   asm("_binary_t4_jpg_end");
 
 extern "C" void app_main(void)
 {
@@ -50,53 +53,37 @@ extern "C" void app_main(void)
     }
 
     /*
-     * 步骤 2：运行诊断
-     * 用全 0、全 127、梯度三种已知模式测试模型能否产生不同输出，
-     * 用于验证模型权重是否正确加载。
-     */
-    driver.run_diagnostic();
-
-    /*
-     * 步骤 3：测试 t1.jpg
-     * 预期输出：class=screw (class_id=0)
+     * 步骤 2：测试 t1.jpg（垫圈）
+     * 预期输出：washer (class_id=0)
      */
     {
         size_t len = (size_t)(t1_jpg_end - t1_jpg_start);
-        ESP_LOGI(TAG, "--- Processing t1.jpg (%zu bytes) ---", len);
         classification_result_t res = driver.infer(t1_jpg_start, len);
-        ESP_LOGI(TAG, "t1.jpg => class=%s (%d), score=%.4f, prob=%.4f%%",
-                 res.label, res.class_id, res.score, res.probability * 100.0f);
+        ESP_LOGI(TAG, "t1.jpg => %s(%d) score=%.4f", res.label, res.class_id, res.score);
     }
 
     /*
      * 步骤 4：测试 t2.jpg
-     * 预期输出：class=washer (class_id=1)
+     * 预期输出：class=screw (class_id=1)
      */
     {
         size_t len = (size_t)(t2_jpg_end - t2_jpg_start);
-        ESP_LOGI(TAG, "--- Processing t2.jpg (%zu bytes) ---", len);
         classification_result_t res = driver.infer(t2_jpg_start, len);
-        ESP_LOGI(TAG, "t2.jpg => class=%s (%d), score=%.4f, prob=%.4f%%",
-                 res.label, res.class_id, res.score, res.probability * 100.0f);
+        ESP_LOGI(TAG, "t2.jpg => %s(%d) score=%.4f", res.label, res.class_id, res.score);
     }
 
-    /*
-     * 步骤 5：用 PC 预处理的 INT8 数据直接测试模型（跳过 JPEG 解码和预处理）
-     * 如果此步骤结果正确但步骤 3/4 错误，说明问题是 JPEG 解码/预处理差异。
-     * 如果此步骤也错误，说明模型推理本身有问题。
-     */
-    ESP_LOGI(TAG, "=== PC-preprocessed data test (bypass JPEG) ===");
+    /* 步骤 5：t3.jpg（垫圈） */
     {
-        ESP_LOGI(TAG, "--- t1 (preprocessed) ---");
-        classification_result_t res1 = driver.infer_from_preprocessed(test_input_t1);
-        ESP_LOGI(TAG, "t1_pre => class=%s (%d), score=%.4f, prob=%.4f%%",
-                 res1.label, res1.class_id, res1.score, res1.probability * 100.0f);
+        size_t len = (size_t)(t3_jpg_end - t3_jpg_start);
+        classification_result_t res = driver.infer(t3_jpg_start, len);
+        ESP_LOGI(TAG, "t3.jpg => %s(%d) score=%.4f", res.label, res.class_id, res.score);
     }
+
+    /* 步骤 6：t4.jpg（螺丝） */
     {
-        ESP_LOGI(TAG, "--- t2 (preprocessed) ---");
-        classification_result_t res2 = driver.infer_from_preprocessed(test_input_t2);
-        ESP_LOGI(TAG, "t2_pre => class=%s (%d), score=%.4f, prob=%.4f%%",
-                 res2.label, res2.class_id, res2.score, res2.probability * 100.0f);
+        size_t len = (size_t)(t4_jpg_end - t4_jpg_start);
+        classification_result_t res = driver.infer(t4_jpg_start, len);
+        ESP_LOGI(TAG, "t4.jpg => %s(%d) score=%.4f", res.label, res.class_id, res.score);
     }
 
     ESP_LOGI(TAG, "All tests complete.");
