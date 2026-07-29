@@ -1,5 +1,7 @@
 # ClassifierDriver — ESP-DL 二分类驱动
 
+Tips: 此项目已整合到 [PartClassifier](https://github.com/m1nglan/PartClassifier)
+
 通用 ESP-DL INT8 NHWC 二分类驱动，支持任意 2 类模型。
 流水线：JPEG 解码 → ImagePreprocessor(resize+crop+量化) → ESP-DL 推理 → softmax
 
