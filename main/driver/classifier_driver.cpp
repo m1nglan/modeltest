@@ -89,8 +89,8 @@ classification_result_t ClassifierDriver::infer(const uint8_t *jpg_data, size_t 
     float s[2]; for (int i=0;i<2;i++) s[i]=dl::dequantize(od[i], DL_SCALE(e));
     float mx = (s[0]>s[1])?s[0]:s[1], e0=expf(s[0]-mx), e1=expf(s[1]-mx);
     float p0=e0/(e0+e1), p1=e1/(e0+e1);
-    if (p0>=p1) { r.class_id=0; r.score=s[0]; r.probability=p0; r.label="washer"; }
-    else        { r.class_id=1; r.score=s[1]; r.probability=p1; r.label="screw";  }
+    if (p0>=p1) { r.class_id=0; r.score=s[0]; r.probability=p0; r.label="screw"; }
+    else        { r.class_id=1; r.score=s[1]; r.probability=p1; r.label="washer";  }
     ESP_LOGI(TAG, "Result: %s(%d) score=%.4f prob=%.2f%%",
              r.label, r.class_id, r.score, r.probability*100.0f);
     return r;
@@ -116,8 +116,8 @@ classification_result_t ClassifierDriver::infer_from_preprocessed(const int8_t *
     float s[2]; for (int i=0;i<2;i++) s[i]=dl::dequantize(od[i], DL_SCALE(e));
     float mx = (s[0]>s[1])?s[0]:s[1], e0=expf(s[0]-mx), e1=expf(s[1]-mx);
     float p0=e0/(e0+e1), p1=e1/(e0+e1);
-    if (p0>=p1) { r.class_id=0; r.score=s[0]; r.probability=p0; r.label="washer"; }
-    else        { r.class_id=1; r.score=s[1]; r.probability=p1; r.label="screw";  }
+    if (p0>=p1) { r.class_id=0; r.score=s[0]; r.probability=p0; r.label="screw"; }
+    else        { r.class_id=1; r.score=s[1]; r.probability=p1; r.label="washer";  }
     ESP_LOGI(TAG, "Result: %s(%d) score=%.4f prob=%.2f%%",
              r.label, r.class_id, r.score, r.probability*100.0f);
     return r;

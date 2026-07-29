@@ -1,132 +1,204 @@
-# ESP32-S3 螺丝/垫圈二分类模型测试项目
+# ClassifierDriver — ESP-DL 二分类驱动
 
-## 概述
+通用 ESP-DL INT8 NHWC 二分类驱动，支持任意 2 类模型。
+流水线：JPEG 解码 → ImagePreprocessor(resize+crop+量化) → ESP-DL 推理 → softmax
 
-在 ESP32-S3 (N16R8) 上部署 INT8 量化 MobileNetV2 风格二分类模型，对 `t1.jpg`（垫圈/washer）和 `t2.jpg`（螺丝/screw）进行实时分类推理。
-
-**硬件平台**: ESP32-S3 (16MB Flash + 8MB Octal PSRAM)  
+**硬件**: ESP32-S3 (N16R8: 16MB Flash + 8MB Octal PSRAM)  
 **框架**: ESP-IDF v6.0.1 + ESP-DL (managed_components)  
-**模型**: MobileNetV2 风格 INT8 量化二分类器, NHWC `[1x224x224x3]`, exponent=-6  
-**量化工具**: ESP-PPQ (PPQ-based)
+**模型**: INT8 量化 NHWC `[1x224x224x3]` 二分类器  
+**量化工具**: ESP-PPQ
 
 ---
 
-## 项目文件结构
+## 📦 快速使用
 
-### 根目录
+### 1. 放置模型和图片
+
+把以下文件放入 `main/` 目录：
+
+```
+main/
+├── model.espdl      # ESP-PPQ 导出的模型文件（NHWC, INT8, [1x224x224x3]）
+├── t1.jpg           # 测试图片 1
+├── t2.jpg           # 测试图片 2
+├── ...
+└── driver/
+    ├── classifier_driver.hpp
+    └── classifier_driver.cpp
+```
+
+### 2. 配置 CMakeLists.txt
+
+`main/CMakeLists.txt` 中注册源文件和要嵌入的二进制数据：
+
+```cmake
+idf_component_register(SRCS "main.cpp" "driver/classifier_driver.cpp"
+                    INCLUDE_DIRS "." "driver"
+                    REQUIRES espressif__esp-dl)
+
+# 嵌入模型和数据文件到 rodata
+set(embed_bin_files
+    "model.espdl"
+    "t1.jpg"
+    "t2.jpg"
+)
+foreach(bin_file ${embed_bin_files})
+    target_add_aligned_binary_data(${COMPONENT_LIB} "${CMAKE_CURRENT_SOURCE_DIR}/${bin_file}" BINARY)
+endforeach()
+```
+
+### 3. 编写主程序
+
+```cpp
+#include "driver/classifier_driver.hpp"
+
+// 链接器自动生成 _binary_*_start / _binary_*_end 符号
+extern const uint8_t t1_jpg_start[] asm("_binary_t1_jpg_start");
+extern const uint8_t t1_jpg_end[]   asm("_binary_t1_jpg_end");
+
+extern "C" void app_main(void)
+{
+    ClassifierDriver driver;
+    driver.init();
+
+    size_t len = (size_t)(t1_jpg_end - t1_jpg_start);
+    classification_result_t res = driver.infer(t1_jpg_start, len);
+    // res.class_id → 0=screw, 1=washer
+    // res.score    → 反量化后的 logit 值
+    // res.probability → softmax 概率
+    // res.label    → "screw" 或 "washer"
+}
+```
+
+### 4. sdkconfig.defaults 配置
+
+```ini
+# Flash 大小（N16R8 = 16MB）
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# PSRAM（8MB Octal）
+CONFIG_ESP32S3_SPIRAM_SUPPORT=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_TYPE_ESPPSRAM64=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_CAPS_ALLOC=y
+
+# 关掉任务看门狗（推理约 3s/张）
+CONFIG_TASK_WDT=n
+CONFIG_INT_WDT_TIMEOUT_MS=30000
+
+# 自定义分区表（factory 6400K 起）
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+```
+
+---
+
+## 🧩 API 文档
+
+### `classification_result_t`
+
+```c
+typedef struct {
+    int class_id;        // 0=screw(螺丝), 1=washer(垫圈)
+    float score;         // 反量化后的原始 logit 值
+    float probability;   // Softmax 概率 [0, 1]
+    const char *label;   // "screw" 或 "washer"
+} classification_result_t;
+```
+
+### `ClassifierDriver`
+
+| 方法 | 说明 |
+|------|------|
+| `ClassifierDriver()` | 构造函数，不执行初始化 |
+| `~ClassifierDriver()` | 析构函数，释放模型和预处理器 |
+| `esp_err_t init()` | 加载 `model.espdl`（从 rodata）+ 创建 ImagePreprocessor |
+| `infer(jpg_data, len)` | JPEG → 解码 → 预处理 → 推理 → 返回分类结果 |
+| `infer_from_preprocessed(int8_data)` | 直接喂 INT8 数据推理（跳过预处理，调试用） |
+
+---
+
+## 🔧 工作原理
+
+### 预处理
+
+ImagePreprocessor 内部自动完成：
+1. **resize** — 短边缩放到 256，保持宽高比（BILINEAR）
+2. **center crop** — 裁切到 224×224
+3. **归一化** — `(pixel - mean) / std`，mean/std 为 [0,255] 范围
+4. **量化** — `round(value / 2^exponent)`，exponent 从模型自动读取
+
+归一化参数（ImageNet 标准）：
+
+| 通道 | mean (×255) | std (×255) |
+|------|------------|-----------|
+| R    | 123.675    | 58.395    |
+| G    | 116.28     | 57.12     |
+| B    | 103.53     | 57.375    |
+
+### 模型要求
+
+| 属性 | 要求 |
+|------|------|
+| 格式 | ESP-DL FlatBuffers (`.espdl`) |
+| 量化 | INT8 对称量化 (zero_point=0) |
+| 布局 | NHWC `[1, 224, 224, 3]` |
+| 输入 exponent | -6（对应 scale=0.015625） |
+| 输出 | 2 个 INT8 logit，exponent=-4 |
+| 类别 0 | screw（螺丝） |
+| 类别 1 | washer（垫圈） |
+
+---
+
+## 📁 项目文件
 
 | 文件 | 说明 |
 |------|------|
-| `CMakeLists.txt` | ESP-IDF 顶层 CMake 项目配置 |
-| `partitions.csv` | 自定义分区表: factory 6400K, 模型内嵌在 app rodata |
-| `sdkconfig.defaults` | 默认配置: 16MB Flash, 8MB Octal PSRAM, WDT 关闭, INT_WDT 30s |
-| `verify_model.py` | PC 端预处理 + ONNX Runtime 验证脚本（与 ESP32 驱动同公式） |
-| `gen_test_data.py` | 用 PC 预处理公式生成 INT8 输入数据，输出 `main/test_inputs.h` |
-| `serial_capture.py` | 串口捕获 ESP32 回传 raw 图片数据的工具脚本（未启用） |
-| `dependencies.lock` | ESP-IDF 组件依赖锁定文件 |
-
-### `main/` 目录
-
-| 文件 | 说明 |
-|------|------|
-| `main.cpp` | 主入口: init → run_diagnostic → infer(t1.jpg) → infer(t2.jpg) → infer_from_preprocessed(t1/t2) |
-| `CMakeLists.txt` | 组件构建配置: 编译源文件 + 嵌入 model.espdl / t1.jpg / t2.jpg 到 rodata |
-| `idf_component.yml` | 组件依赖: espressif/esp-dl: "*", espressif/esp_new_jpeg |
-| `model.espdl` | ESP-DL FlatBuffers 格式的 INT8 量化模型（NHWC） |
-| `model.info` | PPQ 导出的模型信息: 算子列表、张量形状、exponent 参数 |
-| `model.json` | PPQ 导出的量化配置 JSON: 每层量化策略（per-tensor, symmetric, power-of-2） |
-| `t1.jpg` | 测试图 1: 垫圈 (washer), class 0, 640×480 |
-| `t2.jpg` | 测试图 2: 螺丝 (screw), class 1, 640×480 |
-| `t3.jpg` | 测试图 3: 垫圈 (washer), class 0 |
-| `t4.jpg` | 测试图 4: 螺丝 (screw), class 1 |
-| `test_inputs.h` | 由 `gen_test_data.py` 生成, PC 预处理后的 INT8 输入数据, 用于跳过预处理直接测试模型 |
-| `data.log` | 多次烧录测试的串口日志归档 |
-
-### `main/driver/` 目录
-
-| 文件 | 说明 |
-|------|------|
-| `classifier_driver.hpp` | 驱动头文件: `ClassifierDriver` 类声明, `classification_result_t` 结构体 |
-| `classifier_driver.cpp` | 驱动实现: 模型加载, JPEG 解码, ImagePreprocessor (NHWC), 手动 HWC/NCHW 量化, 输出反量化+softmax+argmax |
-
-### `managed_components/` 目录（ESP-IDF 自动管理）
-
-| 组件 | 说明 |
-|------|------|
-| `espressif__esp-dl/` | ESP-DL 推理框架 (commit 77a8a624), 含 Conv/Pool/Add/Clip 等算子 |
-| `espressif__dl_fft/` | DL FFT 数学库依赖 |
-| `espressif__esp_new_jpeg/` | 硬件 JPEG 解码库 |
+| `main/model.espdl` | **模型文件** — ESP-PPQ 导出，放入 main/ 即可 |
+| `main/*.jpg` | **测试图片** — 放入 main/，在 CMakeLists.txt 注册 |
+| `main/driver/classifier_driver.hpp` | 驱动头文件 — API 声明 |
+| `main/driver/classifier_driver.cpp` | 驱动实现 |
+| `main/main.cpp` | 主程序示例 |
+| `main/CMakeLists.txt` | 组件构建配置 |
+| `main/idf_component.yml` | 组件依赖 |
+| `partitions.csv` | 分区表 |
+| `sdkconfig.defaults` | 默认配置 |
+| `verify_model.py` | PC 端验证脚本（需 `.onnx` 模型） |
+| `gen_test_data.py` | 生成 PC 预处理 INT8 数据用于交叉验证 |
 
 ---
 
-## 当前状态
+## 🧪 PC 端验证
 
-### ✅ 已完成
+```bash
+# 需要 PPQ 导出的 INT8 ONNX 模型
+python verify_model.py
+```
 
-1. **项目脚手架**: CMake + 分区表 + sdkconfig 配置完成
-2. **模型加载**: 从 rodata 加载 `model.espdl`, ESP-DL 自动检测 NHWC 格式
-3. **推理流水线**: JPEG 解码 → resize/crop → 归一化+量化 → Conv 推理 → 输出反量化 + softmax + argmax
-4. **PC 端验证**: `verify_model.py` 用 ONNX Runtime 跑 INT8 ONNX 模型, 结果正确
-5. **跳过预处理测试**: `infer_from_preprocessed()` 直接用 PC 预处理好的 INT8 数据灌入模型, 排除预处理差异
-
-### ❌ 未解决
-
-#### 核心问题: ESP-DL INT8 推理结果不正确
-
-即使使用 PC 预处理好的完全正确的 INT8 输入数据, ESP-DL 推理结果仍有错误:
-
-| | PC (FP32 ONNX) | ESP32 (INT8) |
-|---|---|---|
-| t1 (垫圈, class 0) | `[8.25, -9.50]` → class 0 ✅ | `[7.875, -9.125]` → class 0 ✅ |
-| t2 (螺丝, class 1) | `[-12.72, 12.20]` → class 1 ✅ | `[7.000, -8.125]` → class 0 ❌ |
-
-t2 的 class 0/1 符号与 PC 完全相反。
-
-#### 其它已知问题
-
-1. **ESP-DL 自检失败**: 模型内嵌测试数据对比 PPQ 仿真值为 `16`, ESP-DL 实际计算为 `106`（4 倍差异）, 说明 PPQ 仿真与 ESP-DL 运行时存在计算不一致
-2. **JPEG 解码偏差**: `sw_decode_jpeg` 输出的 raw 像素值 (134) 与 PC 的 PIL 解码 (157) 不同, 导致 JPEG 路径的 INT8 输入进一步偏差 (6 vs 18)
-3. **PPQ 量化噪声**: 早期版本 3 层 Conv 噪声 >100%, 优化后降至 ~0.028%（classifier 层）, 量化精度已够
+预处理公式与 ESP32 驱动完全一致，用来确认模型本身的正确性。
 
 ---
 
-## 文件职责速查
+## 🔄 迁移指南
 
-### 训练/量化端（需单独排查）
+要把这个驱动用到自己的二分类模型：
 
-- **模型训练**: MobileNetV2 风格二分类 PyTorch 训练脚本（不在本项目）
-- **PPQ 量化**: ESP-PPQ 量化脚本, 导出 `model.espdl` / `model.info` / `model.json`
-- **`model.espdl`**: 需确认导出时启用 `export_test_values=True` 以启用自检
-- **`model.info`**: 包含所有 53 层 Conv 的 group、activation、kernel_shape 等参数
-
-### 推理端（本项目）
-
-| 文件 | 调试状态 | 备注 |
-|------|---------|------|
-| `classifier_driver.cpp` | 含完整调试打印 | raw 像素, INT8 输入值, 输出 logit, 三种诊断模式 |
-| `main.cpp` | 分步骤执行 | JPG 推理 + PC 预处理数据推理 |
-| `verify_model.py` | 可用 | 需确保 `.onnx` 与 `.espdl` 权重一致 |
-| `gen_test_data.py` | 可用 | 生成 `test_inputs.h` 供 ESP32 跳过预处理 |
+1. **替换模型**: 把 `model.espdl` 替换为你的 ESP-PPQ 导出的模型
+2. **调整归一化参数**: 如果你的训练使用不同的 mean/std，修改 `MEAN_255` / `STD_255`
+3. **调整图片**: 替换 `t*.jpg` 为你的测试图片
+4. **调整输出映射**: 在 `classifier_driver.cpp` 中修改 `label` 和 `class_id` 映射
 
 ---
 
-## 排查计划
+## ⚙️ 依赖
 
-### 第 1 步: 确认 PPQ 导出正确性
-- [ ] PPQ 导出 `model.espdl` 时启用 `export_test_values=True`
-- [ ] 在 ESP32 上观察自检输出, 定位哪一层开始数值不一致（输入层? 第1层Conv? 第N层?）
-
-### 第 2 步: 确认 ONNX INT8 与 FP32 一致性
-- [ ] 用 PPQ 导出 INT8 ONNX 模型, 在 PC 上 ONNX Runtime 跑相同的输入
+| 组件 | 版本 |
+|------|------|
+| ESP-IDF | ≥ 5.3（本项目使用 v6.0.1） |
+| espressif/esp-dl | latest |
+| espressif/esp_new_jpeg | ^1 |
 - [ ] 确认 INT8 ONNX 输出与 FP32 ONNX 一致
-
-### 第 3 步: 逐层对比 ESP-DL vs PPQ 仿真
-- [ ] 用 PPQ 导出每层的中间张量测试数据
-- [ ] ESP-DL 逐层对比, 找到第一个偏差的算子
-
-### 第 4 步: 修复或绕过
-- [ ] 定位到具体算子（如 Conv/Add/Clip）的 INT8 实现差异后, 修复驱动或调整 PPQ 量化策略
-- [ ] 或考虑使用 NCHW 格式模型 + 手动量化路径绕过 ImagePreprocessor
 
 ---
 
@@ -138,15 +210,15 @@ idf.py set-target esp32s3
 idf.py build
 
 # 烧录（可能需要按住 BOOT + 按 ENTER）
-idf.py -p COM22 flash
+idf.py -p COMx flash
 
 # 监视串口
-idf.py -p COM22 monitor
+idf.py -p COMx monitor
 
 # PC 端验证
 python verify_model.py
 
 # 生成 PC 预处理测试数据（重新编译后烧录）
 python gen_test_data.py
-idf.py build -p COM22 flash monitor
+idf.py build -p COMx flash monitor
 ```

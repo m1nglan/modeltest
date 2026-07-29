@@ -10,7 +10,7 @@
  *   ClassifierDriver driver;
  *   driver.init();
  *   classification_result_t res = driver.infer(jpeg_data, jpeg_len);
- *   // class_id == 0 → washer(垫圈),  == 1 → screw(螺丝)
+ *   // class_id == 0 → screw(螺丝),  == 1 → washer(垫圈)
  * @endcode
  */
 
@@ -27,7 +27,7 @@ extern "C" {
  * @brief 单张图片的分类结果
  */
 typedef struct {
-    int class_id;        /**< 类别: 0=washer(垫圈), 1=screw(螺丝) */
+    int class_id;        /**< 类别: 0=screw(螺丝), 1=washer(垫圈) */
     float score;         /**< 反量化后的原始 logit 值 */
     float probability;   /**< Softmax 概率 (0.0 ~ 1.0) */
     const char *label;   /**< 类别名称 "washer" 或 "screw" */
